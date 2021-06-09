@@ -26,6 +26,11 @@ class CarHeuristic:
     def __init__(self):
         self.profile = [0.9, 0.9, 0.9, 0.9]
 
+    def __str__(self):
+        return str(self.profile)
+
+    __repr__ = __str__
+
     def __len__(self) -> int:
         return len(self.profile)
 
@@ -37,7 +42,7 @@ class CarHeuristic:
 
 
 class PacketHeuristics:
-    def __init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.05, unpause_delay: float=1.5, ignore_indexes: List[int]=[]):
+    def __init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.005, unpause_delay: float=1.5, ignore_indexes: List[int]=[]):
         self.cars = {}
         self.car_tracker = {}
 
@@ -168,8 +173,10 @@ class PacketHeuristics:
                 print(f"WARNING: zone_id for {car.name} was None")
                 continue
 
-            if zone_id not in self.cars[car.name][friends][foes]:
-                self.cars[car.name][friends][foes] = [CarHeuristic() for _ in range(self.field_dimensions[0] * self.field_dimensions[1])]
+            if len(self.cars[car.name][friends][foes]) == 0:
+                self.cars[car.name][friends][foes] = {i: CarHeuristic() for i in range(self.field_dimensions[0] * self.field_dimensions[1])}
+            elif zone_id not in self.cars[car.name][friends][foes]:
+                self.cars[car.name][friends][foes][zone_id] = CarHeuristic()
 
             if car.has_wheel_contact:
                 self.car_tracker[car.name]['last_wheel_contact']['time'] = self.time
