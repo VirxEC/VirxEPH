@@ -1,6 +1,6 @@
 # VirxEPH
 
-## PacketHeuristic
+## PacketHeuristics
 
 A class where you just pass in the game tick packet and it handles the rest.
 
