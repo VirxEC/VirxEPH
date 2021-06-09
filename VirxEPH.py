@@ -37,7 +37,7 @@ class CarHeuristic:
 
 
 class PacketHeuristics:
-    def __init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.005, unpause_delay: float=1.5, ignore_indexes: List[int]=[]):
+    def __init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.05, unpause_delay: float=1.5, ignore_indexes: List[int]=[]):
         self.cars = {}
         self.car_tracker = {}
 
@@ -111,9 +111,6 @@ class PacketHeuristics:
 
         loss = self.loss * delta_time
 
-        if self.time - self.last_pause_time < self.unpause_delay:
-            return True
-
         latest_touch = packet.game_ball.latest_touch
         handled_touch = latest_touch.time_seconds != self.last_ball_touch_time
         self.last_ball_touch_time = latest_touch.time_seconds
@@ -185,6 +182,9 @@ class PacketHeuristics:
                 SR = math.sin(car.physics.rotation.roll)
                 self.car_tracker[car.name]['last_wheel_contact']['up'] = Vector(-CR*CY*SP-SR*SY, -CR*SY*SP+SR*CY, CP*CR)
 
+            if self.time - self.last_pause_time < self.unpause_delay:
+                continue
+
             # Ball heuristic
             surrounding_zone_ids = self.get_surrounding_zone_ids(zone_id)
 
@@ -199,9 +199,10 @@ class PacketHeuristics:
 
                     self.cars[car.name][friends][foes][future_ball_zone_id][ball_section] = max(self.cars[car.name][friends][foes][future_ball_zone_id][ball_section] - car_loss, 0)
 
+                all_zones = future_zone_ids.copy()
                 for zone_id_ in surrounding_zone_ids:
-                    if zone_id_ not in future_zone_ids:
-                        future_zone_ids.add(zone_id_)
+                    if zone_id_ not in all_zones:
+                        all_zones.add(zone_id_)
                         self.cars[car.name][friends][foes][zone_id_][ball_section] = max(self.cars[car.name][friends][foes][zone_id_][ball_section] - car_loss, 0)
 
                 if not handled_touch and latest_touch.player_index == i and latest_touch.time_seconds > self.start_time:
