@@ -1,16 +1,35 @@
 import json
+import math
 from pathlib import Path
+from typing import List
 
 import numpy as np
-from rlbot.utils.structures.game_data_struct import GameTickPacket, PlayerInfo, BallInfo
+from rlbot.utils.structures.game_data_struct import (BallInfo, GameTickPacket,
+                                                     PlayerInfo)
 
-NAMES = (
-    "may_ground_shot",
-    "may_jump_shot",
-    "may_double_jump_shot",
-    "may_aerial"
-)
-DEFAULTS = [1, 1, 1, 1]
+def cap(x, min_, max_):
+    return min_ if x < min_ else (max_ if x > max_ else x)
+
+
+class CarHeuristic:
+    NAMES = (
+        "may_ground_shot",
+        "may_jump_shot",
+        "may_double_jump_shot",
+        "may_aerial"
+    )
+
+    def __init__(self):
+        self.profile = [0.9, 0.9, 0.9, 0.9]
+
+    def __len__(self) -> int:
+        return len(self.profile)
+
+    def __getitem__(self, index) -> float:
+        return self.profile[index]
+
+    def __setitem__(self, index, value):
+        self.profile[index] = value
 
 
 class PacketHeuristicAnalyzer:
@@ -28,6 +47,30 @@ class PacketHeuristicAnalyzer:
         self.unpause_delay = unpause_delay
         self.last_pause_time = -1
         self.team_count = [0, 0]
+
+        field_half_width = 5120
+        field_third_width = 8192 / 3
+
+        field_half_length = 5120
+        field_third_length = 10240 / 3
+        
+        # the following comments are from the perspective of this diagram -> https://github.com/RLBot/RLBot/wiki/Useful-Game-Values
+        self.zones = [
+            Zone2D(Vector(-893, -6000), Vector(893, -5120)),  # blue net
+            Zone2D(Vector(-893, 5120), Vector(893, 6000)),  # orange net
+
+            Zone2D(Vector(-field_half_width, -field_half_length), Vector(-field_third_length, -field_third_length)),  # blue field right
+            Zone2D(Vector(-field_third_width, -field_half_length), Vector(field_third_width, -field_third_length)),  # blue field
+            Zone2D(Vector(field_third_width, -field_half_length), Vector(field_half_width, -field_third_length)), # blue field left
+
+            Zone2D(Vector(-field_half_width, -field_third_length), Vector(-field_third_length, field_third_length)),  # mid field right
+            Zone2D(Vector(-field_third_width, -field_third_length), Vector(field_third_width, field_third_length)),  # mid field
+            Zone2D(Vector(field_third_width, -field_third_length), Vector(field_half_width, field_third_length)), # mid field left
+
+            Zone2D(Vector(-field_half_width, field_third_length), Vector(-field_third_length, field_half_length)),  # orange field right
+            Zone2D(Vector(-field_third_width, field_third_length), Vector(field_third_width, field_half_length)),  # orange field
+            Zone2D(Vector(field_third_width, field_third_length), Vector(field_half_width, field_half_length)), # orange field left
+        ]
 
     def add_packet(self, packet: GameTickPacket) -> bool:
         time = packet.game_info.seconds_elapsed
@@ -72,7 +115,7 @@ class PacketHeuristicAnalyzer:
                 self.cars[car.name][friends] = {}
 
             if foes not in self.cars[car.name][friends]:
-                self.cars[car.name][friends][foes] = DEFAULTS.copy()
+                self.cars[car.name][friends][foes] = CarHeuristic()
 
             if car.name not in self.car_tracker:
                 self.car_tracker[car.name] = {
@@ -95,12 +138,12 @@ class PacketHeuristicAnalyzer:
                 self.car_tracker[car.name]['last_wheel_contact']['up'] = Vector(-CR*CY*SP-SR*SY, -CR*SY*SP+SR*CY, CP*CR)
 
             # Ball heuristic
+            car_loss = loss / (friends + 1)
             ball_section = self.get_ball_section(packet.game_ball, car)
-            self.cars[car.name][friends][foes][ball_section] = max(self.cars[car.name][friends][foes][ball_section] - (loss / (friends+1)), 0)
+            self.cars[car.name][friends][foes][ball_section] = max(self.cars[car.name][friends][foes][ball_section] - car_loss, 0)
 
             if not handled_touch and latest_touch.player_index == i:
                 time_airborne = self.time - self.car_tracker[car.name]['last_wheel_contact']['time']
-                # REVISE TO USE self.car_tracker[car.name]["last_wheel_contact"]
                 divisors = [
                     car.has_wheel_contact,
                     ball_section in {1, 2} and car.jumped and not car.double_jumped,
@@ -109,8 +152,8 @@ class PacketHeuristicAnalyzer:
                     True  # We're just going to ignore this touch
                 ]
                 ball_touch_section = divisors.index(True)
-                if index != 5:
-                    self.cars[car.name][friends][foes][ball_touch_section] = min(self.cars[car.name][friends][foes][ball_touch_section] + self.gain + loss, 1)
+                if ball_touch_section != 5:
+                    self.cars[car.name][friends][foes][ball_touch_section] = min(self.cars[car.name][friends][foes][ball_touch_section] + self.gain + car_loss, 1)
             
         return True
     
@@ -127,14 +170,32 @@ class PacketHeuristicAnalyzer:
 
         return divisors.index(True)
 
-    def get_car(self, car_name: str, car_team: int) -> list:
+    def get_car(self, car_name: str, car_team: int) -> CarHeuristic:
         if car_name not in self.cars:
             return None
 
         return self.cars[car_name][self.team_count[car_team] - 1][self.team_count[not car_team]]
 
-    def predict_car(self, car: list):
-        return {NAMES[i]: car[i] > self.threshold for i in range(len(DEFAULTS))}
+    def predict_car(self, car: CarHeuristic) -> dict:
+        return {car.NAMES[i]: car[i] > self.threshold for i in range(len(car))}
+
+
+class Zone2D:
+    def __init__(self, min_: Vector=Vector(), max_: Vector=Vector()):
+        self.min = min_
+        self.max = max_
+
+    def intersect_sphere(self, l: Vector, r: float) -> bool:
+        nearest = Vector(
+            cap(l.x, self.min.x, self.max.x),
+            cap(l.y, self.min.y, self.max.y),
+            cap(l.z, self.min.z, self.max.z)
+        )
+
+        return (l - nearest).magnitude() <= r
+
+    def intersect_point(self, b: Vector) -> bool:
+        return self.min.x <= b.x and self.max.x >= b.x and self.min.y <= b.y and self.max.y >= b.y
 
 
 # Vector supports 1D, 2D and 3D Vectors, as well as calculations between them
@@ -341,8 +402,10 @@ class Vector:
         return value.flatten().dist(self.flatten())
 
     def cap(self, low: float, high: float) -> Vector:
+        if hasattr(value, "_np"):
+            value = value._np
         # Caps all values in a Vector between 'low' and 'high'
-        return Vector(*(max(min(item, high), low) for item in self._np))
+        return Vector(np_arr=np.clip(value, low, high))
 
     def midpoint(self, value: Vector) -> Vector:
         # Midpoint of the 2 vectors
