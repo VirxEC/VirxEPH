@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 import json
 import math
 from pathlib import Path
 from typing import List
 
 import numpy as np
+from rlbot.utils.structures.ball_prediction_struct import BallPrediction
 from rlbot.utils.structures.game_data_struct import (BallInfo, GameTickPacket,
-                                                     PlayerInfo)
+                                                     PlayerInfo, Vector3)
+
 
 def cap(x, min_, max_):
     return min_ if x < min_ else (max_ if x > max_ else x)
@@ -32,8 +36,8 @@ class CarHeuristic:
         self.profile[index] = value
 
 
-class PacketHeuristicAnalyzer:
-    def __init__(self, threshold=0.8, gain=0.21, loss=0.005, unpause_delay=1.5, ignore_indexes=[]):
+class PacketHeuristics:
+    def __init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.005, unpause_delay: float=1.5, ignore_indexes: List[int]=[]):
         self.cars = {}
         self.car_tracker = {}
 
@@ -42,46 +46,60 @@ class PacketHeuristicAnalyzer:
         self.loss = loss
 
         self.ignore_indexes = ignore_indexes
+        self.start_time = -1
         self.time = 0
         self.last_ball_touch_time = -1
         self.unpause_delay = unpause_delay
         self.last_pause_time = -1
         self.team_count = [0, 0]
 
-        field_half_width = 5120
-        field_third_width = 8192 / 3
+        field_half_width = 4096
+        field_third_width = field_half_width / 3
 
         field_half_length = 5120
-        field_third_length = 10240 / 3
+        field_third_length = field_half_length / 3
         
         # the following comments are from the perspective of this diagram -> https://github.com/RLBot/RLBot/wiki/Useful-Game-Values
-        self.zones = [
-            Zone2D(Vector(-893, -6000), Vector(893, -5120)),  # blue net
-            Zone2D(Vector(-893, 5120), Vector(893, 6000)),  # orange net
+        self.zones = (
+            (
+                None,
+                Zone2D(Vector(-field_third_width, 5120, 20), Vector(field_third_width, 6000, 20)),  # orange net
+                None,
+            ),
+            (
+                Zone2D(Vector(field_third_width, field_third_length, 20), Vector(field_half_width, field_half_length, 20)),  # orange field left
+                Zone2D(Vector(-field_third_width, field_third_length, 20), Vector(field_third_width, field_half_length, 20)),  # orange field
+                Zone2D(Vector(-field_half_width, field_third_length, 20), Vector(-field_third_width, field_half_length, 20)),  # orange field right
+            ),
+            (
+                Zone2D(Vector(field_third_width, -field_third_length, 20), Vector(field_half_width, field_third_length, 20)),  # mid field left
+                Zone2D(Vector(-field_third_width, -field_third_length, 20), Vector(field_third_width, field_third_length, 20)),  # mid field
+                Zone2D(Vector(-field_half_width, -field_third_length, 20), Vector(-field_third_width, field_third_length, 20)),  # mid field right
+            ),
+            (
+                Zone2D(Vector(field_third_width, -field_half_length, 20), Vector(field_half_width, -field_third_length, 20)), # blue field left
+                Zone2D(Vector(-field_third_width, -field_half_length, 20), Vector(field_third_width, -field_third_length, 20)),  # blue field
+                Zone2D(Vector(-field_half_width, -field_half_length, 20), Vector(-field_third_width, -field_third_length, 20)),  # blue field right
+            ),
+            (
+                None,
+                Zone2D(Vector(-field_third_width, -6000, 20), Vector(field_third_width, -5120, 20)),  # blue net
+                None,
+            )
+        )
 
-            Zone2D(Vector(-field_half_width, -field_half_length), Vector(-field_third_length, -field_third_length)),  # blue field right
-            Zone2D(Vector(-field_third_width, -field_half_length), Vector(field_third_width, -field_third_length)),  # blue field
-            Zone2D(Vector(field_third_width, -field_half_length), Vector(field_half_width, -field_third_length)), # blue field left
+        self.field_dimensions = [len(self.zones), len(self.zones[0])]
 
-            Zone2D(Vector(-field_half_width, -field_third_length), Vector(-field_third_length, field_third_length)),  # mid field right
-            Zone2D(Vector(-field_third_width, -field_third_length), Vector(field_third_width, field_third_length)),  # mid field
-            Zone2D(Vector(field_third_width, -field_third_length), Vector(field_half_width, field_third_length)), # mid field left
-
-            Zone2D(Vector(-field_half_width, field_third_length), Vector(-field_third_length, field_half_length)),  # orange field right
-            Zone2D(Vector(-field_third_width, field_third_length), Vector(field_third_width, field_half_length)),  # orange field
-            Zone2D(Vector(field_third_width, field_third_length), Vector(field_half_width, field_half_length)), # orange field left
-        ]
-
-    def add_packet(self, packet: GameTickPacket) -> bool:
+    def add_tick(self, packet: GameTickPacket, ball_prediction_struct: BallPrediction) -> bool:
         time = packet.game_info.seconds_elapsed
         delta_time = time - self.time
         self.time = time
 
-        if not packet.game_info.is_round_active:
-            self.last_pause_time = self.time
-            return False
+        if self.start_time == -1:
+            self.start_time = self.time
 
-        if self.time - self.last_pause_time < self.unpause_delay:
+        if not packet.game_info.is_round_active or packet.game_info.is_kickoff_pause:
+            self.last_pause_time = self.time
             return False
 
         team_count = [0, 0]
@@ -93,9 +111,27 @@ class PacketHeuristicAnalyzer:
 
         loss = self.loss * delta_time
 
+        if self.time - self.last_pause_time < self.unpause_delay:
+            return True
+
         latest_touch = packet.game_ball.latest_touch
         handled_touch = latest_touch.time_seconds != self.last_ball_touch_time
         self.last_ball_touch_time = latest_touch.time_seconds
+        
+        ball_zone_id = self.get_zone_id(packet.game_ball.physics.location)
+
+        future_zone_ids = set()
+        future_ball_zone_ids = []
+        for slice_ in ball_prediction_struct.slices[::15]:
+            ball_location = slice_.physics.location
+            future_zone_id = self.get_zone_id(ball_location)
+
+            if future_zone_id not in future_zone_ids:
+                future_zone_ids.add(future_zone_id)
+                future_ball_zone_ids.append((
+                    future_zone_id,
+                    ball_location
+                ))
 
         for i in range(packet.num_cars):
             if i in self.ignore_indexes:
@@ -105,26 +141,38 @@ class PacketHeuristicAnalyzer:
             if car.is_demolished:
                 continue
 
-            if car.name not in self.cars:
-                self.cars[car.name] = {}
-
-            friends = team_count[car.team] - 1
-            foes = team_count[car.team]
-
-            if friends not in self.cars[car.name]:
-                self.cars[car.name][friends] = {}
-
-            if foes not in self.cars[car.name][friends]:
-                self.cars[car.name][friends][foes] = CarHeuristic()
-
             if car.name not in self.car_tracker:
                 self.car_tracker[car.name] = {
                     "last_wheel_contact": {
                         "time": -1,
                         "up": Vector(),
                         "location": Vector()
-                    }
+                    },
+                    "zone_id": -1,
+                    "friends": -1,
+                    "foes": -1
                 }
+
+            if car.name not in self.cars:
+                self.cars[car.name] = {}
+
+            friends = self.car_tracker[car.name]['friends'] = self.get_friend_count(car.team)
+            foes = self.car_tracker[car.name]['foes'] = self.get_foe_count(car.team)
+
+            if friends not in self.cars[car.name]:
+                self.cars[car.name][friends] = {}
+
+            if foes not in self.cars[car.name][friends]:
+                self.cars[car.name][friends][foes] = {}
+
+            zone_id = self.car_tracker[car.name]['zone_id'] = self.get_zone_id(car.physics.location)
+
+            if zone_id is None:
+                print(f"WARNING: zone_id for {car.name} was None")
+                continue
+
+            if zone_id not in self.cars[car.name][friends][foes]:
+                self.cars[car.name][friends][foes] = [CarHeuristic() for _ in range(self.field_dimensions[0] * self.field_dimensions[1])]
 
             if car.has_wheel_contact:
                 self.car_tracker[car.name]['last_wheel_contact']['time'] = self.time
@@ -138,29 +186,43 @@ class PacketHeuristicAnalyzer:
                 self.car_tracker[car.name]['last_wheel_contact']['up'] = Vector(-CR*CY*SP-SR*SY, -CR*SY*SP+SR*CY, CP*CR)
 
             # Ball heuristic
-            car_loss = loss / (friends + 1)
-            ball_section = self.get_ball_section(packet.game_ball, car)
-            self.cars[car.name][friends][foes][ball_section] = max(self.cars[car.name][friends][foes][ball_section] - car_loss, 0)
+            surrounding_zone_ids = self.get_surrounding_zone_ids(zone_id)
 
-            if not handled_touch and latest_touch.player_index == i:
-                time_airborne = self.time - self.car_tracker[car.name]['last_wheel_contact']['time']
-                divisors = [
-                    car.has_wheel_contact,
-                    ball_section in {1, 2} and car.jumped and not car.double_jumped,
-                    ball_section in {1, 2, 3} and car.jumped and car.double_jumped,
-                    ball_section in {2, 3} and (time_airborne > 0.75 or not car.jumped),
-                    True  # We're just going to ignore this touch
-                ]
-                ball_touch_section = divisors.index(True)
-                if ball_touch_section != 5:
-                    self.cars[car.name][friends][foes][ball_touch_section] = min(self.cars[car.name][friends][foes][ball_touch_section] + self.gain + car_loss, 1)
+            if ball_zone_id in surrounding_zone_ids:
+                car_loss = loss / (friends + 1)
+
+                ball_sections = set()
+                for future_ball_zone_id, location in future_ball_zone_ids:
+                    ball_section = self.get_ball_section(location, car.name)
+                    if ball_section not in ball_sections:
+                        ball_sections.add(ball_section)
+
+                    self.cars[car.name][friends][foes][future_ball_zone_id][ball_section] = max(self.cars[car.name][friends][foes][future_ball_zone_id][ball_section] - car_loss, 0)
+
+                for zone_id_ in surrounding_zone_ids:
+                    if zone_id_ not in future_zone_ids:
+                        future_zone_ids.add(zone_id_)
+                        self.cars[car.name][friends][foes][zone_id_][ball_section] = max(self.cars[car.name][friends][foes][zone_id_][ball_section] - car_loss, 0)
+
+                if not handled_touch and latest_touch.player_index == i and latest_touch.time_seconds > self.start_time:
+                    time_airborne = self.time - self.car_tracker[car.name]['last_wheel_contact']['time']
+                    divisors = [
+                        car.has_wheel_contact,
+                        ball_sections & {1, 2} and car.jumped and not car.double_jumped,
+                        ball_sections & {1, 2, 3} and car.jumped and car.double_jumped,
+                        ball_sections & {2, 3} and (time_airborne > 0.75 or not car.jumped),
+                        True  # We're just going to ignore this touch
+                    ]
+                    ball_touch_section = divisors.index(True)
+                    if ball_touch_section != 4:
+                        self.cars[car.name][friends][foes][zone_id][ball_touch_section] = min(self.cars[car.name][friends][foes][zone_id][ball_touch_section] + self.gain + car_loss, 1)
             
         return True
     
-    def get_ball_section(self, ball: BallInfo, car: PlayerInfo) -> int:
-        location = Vector.from_vector(ball.physics.location) - self.car_tracker[car.name]['last_wheel_contact']['location']
+    def get_ball_section(self, ball_location: Vector3, car_name: str) -> int:
+        location = Vector.from_vector(ball_location) - self.car_tracker[car_name]['last_wheel_contact']['location']
         
-        dbz = self.car_tracker[car.name]['last_wheel_contact']['location'].dot(location)
+        dbz = self.car_tracker[car_name]['last_wheel_contact']['location'].dot(location)
         divisors = [
             dbz <= 126.75,
             dbz <= 312.75,
@@ -170,18 +232,47 @@ class PacketHeuristicAnalyzer:
 
         return divisors.index(True)
 
-    def get_car(self, car_name: str, car_team: int) -> CarHeuristic:
-        if car_name not in self.cars:
+    def get_friend_count(self, car_team: int):
+        return self.team_count[car_team] - 1
+    
+    def get_foe_count(self, car_team: int):
+        return self.team_count[not car_team]
+
+    def get_zone_id(self, location: Vector3):
+        for id_0, zones in enumerate(self.zones):
+            for id_1, zone in enumerate(zones):
+                if zone != None and zone.intersect_point(location):
+                    return id_0 * 3 + id_1
+
+    def get_surrounding_zone_ids(self, zone_id: int) -> List[int]:
+        zone_id_0 = zone_id // 3
+        zone_id_1 = zone_id % 3
+        zone_ids = []
+
+        for id_0 in range(-1, 2, 1):
+            id_0 += zone_id_0
+            
+            if -1 < id_0 < self.field_dimensions[0]:
+                for id_1 in range(-1, 2, 1):
+                    id_1 += zone_id_1
+
+                    if -1 < id_1 < self.field_dimensions[1] and self.zones[id_0][id_1] is not None:
+                        zone_ids.append(id_0 * 3 + id_1)
+
+        return zone_ids
+
+    def get_car(self, car_name: str) -> CarHeuristic:
+        if car_name not in self.cars or car_name not in self.car_tracker:
             return None
 
-        return self.cars[car_name][self.team_count[car_team] - 1][self.team_count[not car_team]]
+        return self.cars[car_name][self.car_tracker[car_name]['friends']][self.car_tracker[car_name]['foes']][self.car_tracker[car_name]['zone_id']]
 
     def predict_car(self, car: CarHeuristic) -> dict:
         return {car.NAMES[i]: car[i] > self.threshold for i in range(len(car))}
 
 
 class Zone2D:
-    def __init__(self, min_: Vector=Vector(), max_: Vector=Vector()):
+    def __init__(self, min_: Vector, max_: Vector):
         self.min = min_
         self.max = max_
 
@@ -194,7 +285,7 @@ class Zone2D:
 
         return (l - nearest).magnitude() <= r
 
-    def intersect_point(self, b: Vector) -> bool:
+    def intersect_point(self, b: Vector3) -> bool:
         return self.min.x <= b.x and self.max.x >= b.x and self.min.y <= b.y and self.max.y >= b.y
 
 
