@@ -105,7 +105,8 @@ class PacketHeuristics:
 
         if not packet.game_info.is_round_active or packet.game_info.is_kickoff_pause:
             self.last_pause_time = self.time
-            return False
+            if not packet.game_info.is_round_active:
+                return False
 
         team_count = [0, 0]
 
@@ -189,7 +190,7 @@ class PacketHeuristics:
                 SR = math.sin(car.physics.rotation.roll)
                 self.car_tracker[car.name]['last_wheel_contact']['up'] = Vector(-CR*CY*SP-SR*SY, -CR*SY*SP+SR*CY, CP*CR)
 
-            if self.time - self.last_pause_time < self.unpause_delay:
+            if packet.game_info.is_kickoff_pause or self.time - self.last_pause_time < self.unpause_delay:
                 continue
 
             # Ball heuristic
@@ -230,7 +231,7 @@ class PacketHeuristics:
     def get_ball_section(self, ball_location: Vector3, car_name: str) -> int:
         location = Vector.from_vector(ball_location) - self.car_tracker[car_name]['last_wheel_contact']['location']
         
-        dbz = self.car_tracker[car_name]['last_wheel_contact']['location'].dot(location)
+        dbz = self.car_tracker[car_name]['last_wheel_contact']['up'].dot(location)
         divisors = [
             dbz <= 126.75,
             dbz <= 312.75,
