@@ -217,9 +217,9 @@ class PacketHeuristics:
                     time_airborne = self.time - self.car_tracker[car.name]['last_wheel_contact']['time']
                     divisors = [
                         car.has_wheel_contact,
-                        ball_sections & {1, 2} and car.jumped and not car.double_jumped,
-                        ball_sections & {1, 2, 3} and car.jumped and car.double_jumped,
-                        ball_sections & {2, 3} and (time_airborne > 0.75 or not car.jumped),
+                        1 in ball_sections and car.jumped,
+                        {2, 3} & ball_sections and car.jumped and car.double_jumped,
+                        {2, 3} & ball_sections and (time_airborne > 0.75 or not car.jumped),
                         True  # We're just going to ignore this touch
                     ]
                     ball_touch_section = divisors.index(True)
