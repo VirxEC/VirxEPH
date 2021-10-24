@@ -35,7 +35,7 @@ class VirxEPHExternal(BaseScript):
                     car = packet.game_cars[i]
                     car_name = self.packet_heuristics.get_true_car_name(car.name)
 
-                    prediction_values = self.packet_heuristics.get_car(car_name)
+                    prediction_values = self.packet_heuristics.get_car(car.name)
 
                     if prediction_values is None:
                         print(f"Skipping {car.name} - ({car_name})")
