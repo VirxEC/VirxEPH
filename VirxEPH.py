@@ -205,7 +205,7 @@ class PacketHeuristics:
                 if friends > 0:
                     car_loss = loss / ((friends + 1) / 1.6)
                 else:
-                    car_loss = loss
+                    car_loss = loss / 0.8
 
                 if not handled_touch and latest_touch.player_index == i and latest_touch.time_seconds > self.start_time:
                     time_airborne = self.time - self.car_tracker[car.name]['last_wheel_contact']['time']
