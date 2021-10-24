@@ -28,7 +28,7 @@ Returns `False` if the packet wasn't added to the heuristics due to the game bei
 
 ### get_car(self, car_name: str) -> CarHeuristic
 
-+ `car_name` - The name of the car that want
++ `car_name` - The name of the car that's wanted
 
 Returns an instance of CarHeuristic.
 
