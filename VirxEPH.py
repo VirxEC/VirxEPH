@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from copy import deepcopy
-from typing import List
+from typing import Iterator, List
 
 import numpy as np
 from rlbot.utils.structures.ball_prediction_struct import BallPrediction
@@ -14,7 +14,7 @@ def cap(x, min_, max_):
     return min_ if x < min_ else (max_ if x > max_ else x)
 
 
-class CarHeuristic:
+class CarHeuristic(list):
     NAMES = (
         "may_ground_shot",
         "may_jump_shot",
@@ -29,6 +29,9 @@ class CarHeuristic:
         return str(self.profile)
 
     __repr__ = __str__
+
+    def __iter__(self) -> Iterator:
+        return iter(self.profile)
 
     def __len__(self) -> int:
         return len(self.profile)
