@@ -242,10 +242,11 @@ class PacketHeuristics:
         if car.has_wheel_contact:
             return 0
 
-        if ball_zone <= 1 and car.jumped and time_airborne < 1.6 and (not car.double_jumped or np.linalg.norm(get_np_from_vector3(car.physics.angular_velocity)) > 5):
+        ang_vel_norm = np.linalg.norm(get_np_from_vector3(car.physics.angular_velocity))
+        if ball_zone <= 1 and car.jumped and time_airborne < 1.6 and (not car.double_jumped or ang_vel_norm > 4.5):
             return 1
 
-        if ball_zone <= 2 and car.jumped and car.double_jumped and time_airborne <= 2:
+        if ball_zone <= 2 and car.jumped and car.double_jumped and time_airborne < 1.75 and ang_vel_norm <= 5:
             return 2
 
         if time_airborne > 0.5 or not car.jumped:
