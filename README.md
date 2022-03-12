@@ -6,7 +6,7 @@ A class where you just pass in the game tick packet and it handles the rest.
 
 For an example implementation see `external.py`.
 
-### \_\_init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.0045, unpause_delay: float=1.5, ignore_indexes: List[int]=[], verbose=False)
+### \_\_init__(self, threshold: float=0.8, gain: float=0.21, loss: float=0.0045, unpause_delay: float=0.75, ignore_indexes: List[int]=[], verbose=False)
 
 Initializes the packet heuristics. If you don't have anything specific in mind, just leave all of the values at their defaults.
 
